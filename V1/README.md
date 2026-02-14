@@ -284,5 +284,163 @@ MeEA/
 │   ├── CSignalEngine.mqh          # 信号引擎（集成以上三模块）
 │   ├── CRiskManager.mqh           # 风控与仓位管理
 │   └── CTradeExecutor.mqh         # 交易执行器
+├── backtest/                      # Python 回测系统
+│   ├── __init__.py
+│   ├── __main__.py                # python -m backtest 入口
+│   ├── config.py                  # 参数与品种配置
+│   ├── kalman_filter.py           # ← CKalmanFilter.mqh
+│   ├── hurst_exponent.py          # ← CHurstExponent.mqh
+│   ├── volatility_regime.py       # ← CVolatilityRegime.mqh
+│   ├── signal_engine.py           # ← CSignalEngine.mqh
+│   ├── risk_manager.py            # ← CRiskManager.mqh + 保证金模拟
+│   ├── position.py                # 持仓/交易数据结构
+│   ├── backtester.py              # bar-by-bar 回测引擎
+│   ├── data_loader.py             # CSV 加载 / yfinance 下载
+│   ├── reporting.py               # 绩效报告
+│   ├── visualize.py               # matplotlib 图表
+│   ├── main.py                    # CLI 入口
+│   └── data/                      # 数据目录
+├── requirements.txt               # Python 依赖
 └── README.md                      # 本文档
 ```
+
+---
+
+## Python 回测系统
+
+### 简介
+
+`backtest/` 目录提供了一套纯 Python 实现的回测系统，将 MQL5 EA 的核心逻辑 1:1 移植到 Python 中，用于：
+
+- **快速策略验证** — 无需 MT5 即可在本地验证信号逻辑和参数调优
+- **数据灵活性** — 支持本地 CSV 和 yfinance 在线下载
+- **可视化分析** — matplotlib 生成权益曲线、回撤、Hurst 等多维度图表
+
+每个 Python 模块对应一个 MQL5 组件，算法逻辑保持一致（详见下方映射表）。
+
+### 环境安装
+
+```bash
+# Python 3.10+
+pip install -r requirements.txt
+```
+
+依赖库：`numpy`, `pandas`, `matplotlib`, `yfinance`（仅在线下载时需要）
+
+### 使用示例
+
+**1. 使用本地 CSV 数据回测**
+
+```bash
+python -m backtest --symbol EURUSD --equity 10000 --leverage 100 \
+    --data backtest/data/EURUSD_H1.csv
+```
+
+**2. 通过 yfinance 下载日线数据回测**
+
+```bash
+python -m backtest --symbol GBPUSD --equity 5000 --leverage 200 \
+    --download --start 2023-01-01 --end 2024-12-31
+```
+
+**3. 覆盖策略参数**
+
+```bash
+python -m backtest --symbol EURUSD --equity 10000 --leverage 100 \
+    --data data.csv --risk 0.02 --max-positions 5 --hurst-threshold 0.60
+```
+
+**其他选项：**
+
+| 选项 | 说明 |
+|------|------|
+| `--no-plot` | 跳过图表显示 |
+| `--save-plot PATH` | 将图表保存为图片文件 |
+| `--export-trades PATH` | 将交易记录导出为 CSV |
+
+完整参数列表可通过 `python -m backtest --help` 查看。
+
+### 支持品种
+
+| 品种 | 类型 | 合约大小 | 默认点差 |
+|------|------|----------|----------|
+| EURUSD | 外汇 | 100,000 | 15 点 |
+| GBPUSD | 外汇 | 100,000 | 18 点 |
+| USDJPY | 外汇 | 100,000 | 15 点 |
+| AUDUSD | 外汇 | 100,000 | 18 点 |
+| XAUUSD | 黄金 | 100 | 30 点 |
+
+### 回测报告说明
+
+回测完成后终端输出的报告包含以下指标：
+
+**Account（账户）**
+- `Initial / Final Equity` — 初始/最终权益
+- `Period` — 回测时间范围
+
+**Trade Statistics（交易统计）**
+- `Total Trades` — 总交易笔数（含多/空分类）
+- `Win Rate` — 胜率
+- `Avg Win / Avg Loss` — 平均盈利/亏损金额
+- `Profit/Loss Ratio` — 盈亏比（平均盈利 ÷ 平均亏损）
+- `Max Consec. Wins / Losses` — 最大连胜/连亏次数
+
+**Returns（收益）**
+- `Net Profit` — 净利润
+- `Gross Profit / Gross Loss` — 总盈利/总亏损
+- `Profit Factor` — 利润因子（总盈利 ÷ 总亏损）
+- `CAGR` — 年化复合增长率
+
+**Risk（风险）**
+- `Sharpe Ratio` — 夏普比率（年化，基于 252 交易日）
+- `Sortino Ratio` — 索提诺比率（仅考虑下行风险）
+- `Max Drawdown` — 最大回撤百分比
+- `Max DD Duration` — 最大回撤持续时长（K 线数）
+- `Max Single Loss` — 单笔最大亏损
+
+**Position / Margin（仓位/保证金）**
+- `Avg Hold Duration` — 平均持仓时长（K 线数）
+- `Max Concurrent Positions` — 最大同时持仓数
+- `Max Margin Usage` — 最大保证金使用率
+
+### 图表说明
+
+回测默认生成 4 子图的组合图表：
+
+| 子图 | 内容 |
+|------|------|
+| 1 — Price & Kalman | 收盘价（黑色）、Kalman Level（蓝色）、置信带（灰色虚线）、交易标记（绿 = 盈利、红 = 亏损） |
+| 2 — Equity | 权益曲线（深蓝色），灰色虚线标记初始资金 |
+| 3 — Hurst | Hurst 指数（紫色），橙色虚线 = 趋势阈值，灰色虚线 = 0.50 随机游走基准 |
+| 4 — Drawdown | 回撤面积图（红色填充） |
+
+### MQL5 ↔ Python 模块映射
+
+| MQL5 文件 | Python 模块 | 说明 |
+|-----------|-------------|------|
+| `Include/CKalmanFilter.mqh` | `backtest/kalman_filter.py` | Kalman Filter 状态空间模型 |
+| `Include/CHurstExponent.mqh` | `backtest/hurst_exponent.py` | Hurst 指数 R/S 分析 |
+| `Include/CVolatilityRegime.mqh` | `backtest/volatility_regime.py` | 波动率状态分类 |
+| `Include/CSignalEngine.mqh` | `backtest/signal_engine.py` | 信号引擎 |
+| `Include/CRiskManager.mqh` | `backtest/risk_manager.py` | 风控与仓位管理 + 保证金模拟 |
+| `Include/CTradeExecutor.mqh` | `backtest/backtester.py` | 交易执行（内嵌于回测引擎） |
+| `Experts/MeEA.mq5` | `backtest/main.py` | 主入口与调度 |
+| — | `backtest/position.py` | 持仓/交易数据结构（Python 新增） |
+| — | `backtest/data_loader.py` | 数据加载（Python 新增） |
+| — | `backtest/reporting.py` | 绩效报告（Python 新增） |
+| — | `backtest/visualize.py` | 图表可视化（Python 新增） |
+| — | `backtest/config.py` | 参数配置（Python 新增） |
+
+### 与 MQL5 回测的差异
+
+| 方面 | MQL5 Strategy Tester | Python 回测系统 |
+|------|---------------------|-----------------|
+| **价格模型** | 支持 Tick 级别模拟 | Bar-by-bar（基于 OHLC），使用 Close 价成交 |
+| **点差** | 来自经纪商的真实 tick 点差 | 使用品种配置中的固定点差模拟 |
+| **滑点** | 真实市场滑点 | 按 `slippage_points` 参数固定模拟 |
+| **保证金** | 经纪商真实保证金计算 | 简化公式：`lots × contract_size × price / leverage` |
+| **手数规整** | 按经纪商 lot_step 规整 | 同样按 `lot_step` 规整，逻辑一致 |
+| **数据来源** | MT5 历史数据中心 | CSV 文件或 yfinance（日线） |
+| **执行速度** | 较慢（完整 Tick 模拟） | 较快（纯 Python，bar-by-bar） |
+
+> **注意**: Python 回测结果可能与 MT5 Strategy Tester 有偏差，主要原因是价格模型精度差异和点差/滑点模拟方式不同。Python 回测更适合快速验证信号逻辑和参数方向，精确绩效评估建议以 MT5 回测为准。
